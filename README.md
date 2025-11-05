@@ -26,7 +26,7 @@ Aplicación **Streamlit** para explorar series de tiempo de precios (multi-ticke
 
 ### Dependencias necesarias
 
-Crea un archivo `requirements.txt` con lo siguiente:
+Hay un archivo `requirements.txt` con lo siguiente:
 
 ```txt
 numpy>=1.23
@@ -39,7 +39,7 @@ scipy>=1.10
 patsy>=0.5
 ```
 
-Instálalas con:
+Se instalan con:
 
 ```bash
 pip install -r requirements.txt
@@ -49,15 +49,15 @@ pip install -r requirements.txt
 
 ## 🚀 Ejecución
 
-1. Coloca tu archivo CSV dentro de una carpeta `datos/`, por ejemplo:  
+1. Colocar el archivo CSV dentro de una carpeta `datos/`, por ejemplo:  
    `datos/market_prices.csv`
-2. Abre una terminal y ejecuta:
+2. Abrir una terminal y ejecutar:
 
 ```bash
 streamlit run app.py
 ```
 
-3. Se abrirá la app en tu navegador en  
+3. Se abrirá la app en el navegador en  
    👉 [http://localhost:8501](http://localhost:8501)
 
 ---
@@ -69,7 +69,7 @@ Debe tener al menos tres columnas:
 | Columna       | Descripción                         | Ejemplo        |
 |----------------|--------------------------------------|----------------|
 | `date`         | Fecha (YYYY-MM-DD)                   | 2024-01-31     |
-| `ticker`       | Identificador del instrumento        | BIMBOA_MX      |
+| `instrument_id`       | Identificador del instrumento        | BIMBOA_MX      |
 | `adj_close`    | Precio ajustado                      | 77.45          |
 
 Ejemplo:
@@ -82,7 +82,7 @@ date,ticker,adj_close
 2023-02-28,WALMEX_MX,63.05
 ```
 
-> Si tus columnas tienen otros nombres, puedes **mapearlas** en la barra lateral de la app.
+> Si las columnas tienen otros nombres, se puedden **mapear** en la barra lateral de la app.
 
 ---
 
@@ -90,7 +90,7 @@ date,ticker,adj_close
 
 ### 1️⃣ Cargar datos
 - Escribe la ruta del CSV en la barra lateral.  
-- Si las columnas no se llaman `date`, `ticker`, `adj_close`, ajusta el mapeo.  
+- Si las columnas no se llaman `date`, `instrument_id`, `adj_close`, ajusta el mapeo.  
 - Elige la frecuencia (**D**, **W**, **B**, **M**, **Q**) y la transformación deseada.  
 
 ### 2️⃣ Configurar modelo
@@ -173,11 +173,3 @@ date,ticker,adj_close
   ```python
   warnings.filterwarnings("ignore")
   ```
-
----
-
-## 📝 Licencia
-
-Puedes usar este código libremente con atribución (por ejemplo bajo licencia MIT).
-
----
