@@ -16,12 +16,19 @@ import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="EDA + ARIMA (BMV) • Multi-ticker", layout="wide")
 
+# ===================== PARÁMETROS FIJOS (ruta/columnas) =====================
+DATA_PATH   = "datos/market_prices.csv"  # <-- tu CSV ya fijo
+DATE_COL    = "date"                     # <-- columna fecha en tu CSV
+TICKER_COL  = "instrument_id"                   # <-- (o "instrument_id" si así viene)
+PRICE_COL   = "adj_close"                # <-- precio ajustado
+
 # ===================== UTILIDADES =====================
 @st.cache_data
 def load_prices(path, date_col, ticker_col, price_col):
     df = pd.read_csv(path, parse_dates=[date_col])
+    # renombra a nombres estándar internos
     df = df.rename(columns={date_col: "date", ticker_col: "instrument_id", price_col: "adj_close"})
-    df = df[["date", "instrument_id", "adj_close"]].dropna().sort_values("date")
+    df = df[["date", "instrument_id", "adj_close"]].dropna().sort_values(["instrument_id","date"])
     return df
 
 def resample_wide(df, freq="D"):
@@ -84,7 +91,7 @@ def fit_forecast_arima(y, h, seasonal, m):
     if y.index.inferred_freq is None:
         inferred = pd.infer_freq(y.index)
         if inferred is None:
-            # forzar con la diferencia más común
+            # fallback razonable a diario
             inferred = "D"
         y = y.asfreq(inferred)
 
@@ -92,7 +99,7 @@ def fit_forecast_arima(y, h, seasonal, m):
     d = infer_d(y)
     D = infer_D(y, m, seasonal=seasonal)
 
-    # Cuadrícula pequeña (rápida en Streamlit)
+    # Cuadrícula pequeña (rápida)
     p_grid = [0, 1, 2]
     q_grid = [0, 1, 2]
     P_grid = [0, 1] if (seasonal and m > 1) else [0]
@@ -174,144 +181,225 @@ def plot_stl(y, period):
                   title="Descomposición STL")
     return fig, comp.set_index("date")
 
-# ===================== SIDEBAR =====================
-st.sidebar.header("Datos")
-path = st.sidebar.text_input("Ruta del CSV", "datos/market_prices.csv")
-st.sidebar.caption("Columnas esperadas: date, ticker, adj_close")
+# ===================== CARGA (automática, sin inputs) =====================
+try:
+    raw = load_prices(DATA_PATH, DATE_COL, TICKER_COL, PRICE_COL)
+except Exception as e:
+    st.error(f"No pude leer el CSV en '{DATA_PATH}': {e}")
+    st.stop()
 
-with st.sidebar.expander("Mapeo de columnas (si tu CSV difiere)"):
-    col_date = st.text_input("Columna fecha", value="date")
-    col_ticker = st.text_input("Columna ticker", value="ticker")
-    col_price = st.text_input("Columna precio ajustado", value="adj_close")
-
+# ===================== CONTROLES (solo análisis) =====================
+st.sidebar.header("Parámetros de análisis")
 freq = st.sidebar.selectbox("Frecuencia de análisis", ["D","W","M","B","Q"], index=2)
 transform = st.sidebar.selectbox("Transformación para EDA/ARIMA",
                                  ["Precio", "Log-precio", "Retorno (%)", "Retorno log (%)"], index=0)
-
-# Estacionalidad
 seasonal = st.sidebar.checkbox("Estacional (SARIMA/STL)", value=True)
 m_default = {"D":7, "W":52, "B":5, "M":12, "Q":4}[freq]
 m = st.sidebar.number_input("Periodo estacional (m)", min_value=1, value=m_default, step=1)
-
-# Pronóstico
 h = st.sidebar.number_input("Horizonte de pronóstico (pasos)", min_value=1, value=12, step=1)
 
-# ===================== CARGA =====================
-try:
-    raw = load_prices(path, col_date, col_ticker, col_price)
-except Exception as e:
-    st.error(f"No pude leer el CSV: {e}")
-    st.stop()
-
+# ===================== PREPROCESO =====================
 wide = resample_wide(raw, freq=freq)
-tickers = sorted([t for t in wide.columns if wide[t].dropna().shape[0] > m + 24])
+tickers_all = sorted([t for t in wide.columns if wide[t].dropna().shape[0] > m + 24])
 
-st.sidebar.header("Selección de tickers")
-sel = st.sidebar.multiselect("Elige 1 o más tickers", options=tickers, default=tickers[:2] if tickers else [])
+st.sidebar.header("Selección de tickers (para pestañas 1–3)")
+sel = st.sidebar.multiselect("Elige 1 o más tickers", options=tickers_all, default=tickers_all[:2] if tickers_all else [])
 
-if not sel:
-    st.warning("Selecciona al menos un ticker.")
-    st.stop()
-
-# ===================== LAYOUT PRINCIPAL =====================
 st.title("EDA + ARIMA • Multi-ticker (BMV/MXN)")
-
-tabs = st.tabs(["Resumen multi-ticker", "EDA por ticker", "ARIMA por ticker"])
+tabs = st.tabs(["Resumen multi-ticker", "EDA por ticker", "ARIMA por ticker", "Ranking inversión (35)"])
 
 # ---------- TAB 1: Resumen multi-ticker ----------
 with tabs[0]:
-    st.subheader("Vista rápida de precios (resampleados)")
-    st.line_chart(wide[sel])
+    if not sel:
+        st.info("Selecciona al menos un ticker en la barra lateral.")
+    else:
+        st.subheader("Vista rápida de precios (resampleados)")
+        st.line_chart(wide[sel])
 
-    # métricas comparativas (retorno y vol anualizadas sobre mensual)
-    st.markdown("**Stats comparativas (últimos 3 años, con retornos mensuales)**")
-    wide_m = wide.resample("M").last()
-    rets_m = wide_m[sel].pct_change().dropna()
-    if len(rets_m) > 36:
-        rets_m = rets_m.iloc[-36:]
-    ann = 12
-    perf = pd.DataFrame({
-        "Retorno anual (%)": (rets_m.mean() * ann * 100),
-        "Vol anual (%)": (rets_m.std() * np.sqrt(ann) * 100),
-        "Sharpe (rf=0)": (rets_m.mean() / rets_m.std())
-    }).round(2).dropna()
-    st.dataframe(perf)
+        # métricas comparativas (retorno y vol anualizadas sobre mensual)
+        st.markdown("**Stats comparativas (últimos 3 años, con retornos mensuales)**")
+        wide_m = wide.resample("M").last()
+        rets_m = wide_m[sel].pct_change().dropna()
+        if len(rets_m) > 36:
+            rets_m = rets_m.iloc[-36:]
+        ann = 12
+        perf = pd.DataFrame({
+            "Retorno anual (%)": (rets_m.mean() * ann * 100),
+            "Vol anual (%)": (rets_m.std() * np.sqrt(ann) * 100),
+            "Sharpe (rf=0)": (rets_m.mean() / rets_m.std())
+        }).round(2).dropna()
+        st.dataframe(perf)
 
 # ---------- TAB 2: EDA ----------
 with tabs[1]:
-    t = st.selectbox("Ticker para EDA", options=sel, index=0, key="eda_ticker")
-    y = series_for_ticker(wide, t, transform).dropna()
-    if y.empty:
-        st.info("La serie está vacía tras la transformación. Cambia 'Transformación'.")
+    if not sel:
+        st.info("Selecciona al menos un ticker en la barra lateral.")
     else:
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            st.subheader(f"{t} • Serie transformada")
-            st.line_chart(y)
-        with c2:
-            st.subheader("Resumen")
-            st.write(pd.Series({
-                "Observaciones": int(y.shape[0]),
-                "Inicio": y.index.min(),
-                "Fin": y.index.max(),
-                "Media": float(y.mean()),
-                "Std": float(y.std())
-            }).round(4))
-            st.write("**ADF (estacionariedad)**")
-            st.write(adf_report(y))
-
-        # STL
-        st.markdown("### Descomposición STL")
-        try:
-            fig_stl, comp = plot_stl(y, period=m if seasonal else max(2, m))
-            st.plotly_chart(fig_stl, use_container_width=True)
-        except Exception as e:
-            st.info(f"No se pudo ejecutar STL: {e}")
-
-        # ACF y PACF
-        st.markdown("### ACF y PACF")
-        fig1, ax1 = plt.subplots(figsize=(6, 3))
-        plot_acf(y.dropna(), ax=ax1, lags=min(48, len(y)//2))
-        st.pyplot(fig1)
-        fig2, ax2 = plt.subplots(figsize=(6, 3))
-        plot_pacf(y.dropna(), ax=ax2, lags=min(48, len(y)//2), method="ywm")
-        st.pyplot(fig2)
-
-        # residuales de STL
-        st.markdown("### Residuales (STL)")
-        if "resid" in comp.columns:
-            st.line_chart(comp["resid"])
+        t = st.selectbox("Ticker para EDA", options=sel, index=0, key="eda_ticker")
+        y = series_for_ticker(wide, t, transform).dropna()
+        if y.empty:
+            st.info("La serie está vacía tras la transformación. Cambia 'Transformación'.")
         else:
-            st.info("No hay residuales disponibles para mostrar.")
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                st.subheader(f"{t} • Serie transformada")
+                st.line_chart(y)
+            with c2:
+                st.subheader("Resumen")
+                st.write(pd.Series({
+                    "Observaciones": int(y.shape[0]),
+                    "Inicio": y.index.min(),
+                    "Fin": y.index.max(),
+                    "Media": float(y.mean()),
+                    "Std": float(y.std())
+                }).round(4))
+                st.write("**ADF (estacionariedad)**")
+                st.write(adf_report(y))
 
-# ---------- TAB 3: ARIMA ----------
+            # STL
+            st.markdown("### Descomposición STL")
+            try:
+                fig_stl, comp = plot_stl(y, period=m if seasonal else max(2, m))
+                st.plotly_chart(fig_stl, use_container_width=True)
+            except Exception as e:
+                st.info(f"No se pudo ejecutar STL: {e}")
+
+            # ACF y PACF
+            st.markdown("### ACF y PACF")
+            fig1, ax1 = plt.subplots(figsize=(6, 3))
+            plot_acf(y.dropna(), ax=ax1, lags=min(48, len(y)//2))
+            st.pyplot(fig1)
+            fig2, ax2 = plt.subplots(figsize=(6, 3))
+            plot_pacf(y.dropna(), ax=ax2, lags=min(48, len(y)//2), method="ywm")
+            st.pyplot(fig2)
+
+            # residuales de STL
+            st.markdown("### Residuales (STL)")
+            try:
+                st.line_chart(comp["resid"])
+            except Exception:
+                st.info("No hay residuales disponibles para mostrar.")
+
+# ---------- TAB 3: ARIMA (individual) ----------
 with tabs[2]:
-    t2 = st.selectbox("Ticker para ARIMA", options=sel, index=0, key="arima_ticker")
-    y2 = series_for_ticker(wide, t2, transform).dropna()
-    if y2.empty:
-        st.info("La serie está vacía tras la transformación. Cambia 'Transformación'.")
+    if not sel:
+        st.info("Selecciona al menos un ticker en la barra lateral.")
     else:
-        # Asegura frecuencia explícita
-        if y2.index.inferred_freq is None:
-            inferred = pd.infer_freq(y2.index)
-            if inferred is None:
-                inferred = "M"  # fallback razonable
-            y2 = y2.asfreq(inferred)
+        t2 = st.selectbox("Ticker para ARIMA", options=sel, index=0, key="arima_ticker")
+        y2 = series_for_ticker(wide, t2, transform).dropna()
+        if y2.empty:
+            st.info("La serie está vacía tras la transformación. Cambia 'Transformación'.")
+        else:
+            # Asegura frecuencia explícita
+            if y2.index.inferred_freq is None:
+                inferred = pd.infer_freq(y2.index)
+                if inferred is None:
+                    inferred = "M"  # fallback razonable
+                y2 = y2.asfreq(inferred)
 
-        fitted, fcst, resid, meta, ci = fit_forecast_arima(y2, h=h, seasonal=seasonal, m=m)
+            fitted, fcst, resid, meta, ci = fit_forecast_arima(y2, h=h, seasonal=seasonal, m=m)
 
-        st.write(f"**Modelo seleccionado**: {meta}")
-        st.plotly_chart(
-            plot_ts(y2, fitted, fcst, ci=ci, title=f"{t2} • {transform} + SARIMAX (statsmodels)"),
-            use_container_width=True
-        )
+            st.write(f"**Modelo seleccionado**: {meta}")
+            st.plotly_chart(
+                plot_ts(y2, fitted, fcst, ci=ci, title=f"{t2} • {transform} + SARIMAX (statsmodels)"),
+                use_container_width=True
+            )
 
-        # Residuales
-        st.markdown("### Residuales del ajuste")
-        st.line_chart(resid)
+            # Residuales
+            st.markdown("### Residuales del ajuste")
+            st.line_chart(resid)
 
-        # Métricas simples in-sample
-        common_idx = y2.index.intersection(fitted.index)
-        rmse = float(np.sqrt(np.mean((y2.loc[common_idx] - fitted.loc[common_idx])**2)))
-        mae = float(np.mean(np.abs(y2.loc[common_idx] - fitted.loc[common_idx])))
-        st.write(pd.Series({"RMSE (in-sample)": rmse, "MAE (in-sample)": mae}).round(4))
+            # Métricas simples in-sample
+            common_idx = y2.index.intersection(fitted.index)
+            rmse = float(np.sqrt(np.mean((y2.loc[common_idx] - fitted.loc[common_idx])**2)))
+            mae = float(np.mean(np.abs(y2.loc[common_idx] - fitted.loc[common_idx])))
+            st.write(pd.Series({"RMSE (in-sample)": rmse, "MAE (in-sample)": mae}).round(4))
+
+# ---------- TAB 4: Ranking inversión (35) ----------
+with tabs[3]:
+    st.subheader("ARIMA batch en 35 emisoras + Top 5 de inversión")
+    st.caption("El ranking se basa en el **retorno esperado (%)** del último paso del pronóstico, penalizado por **riesgo (%)** (ancho del IC95% relativo). Score = retorno − 0.5 × riesgo.")
+
+    if len(tickers_all) == 0:
+        st.info("No hay emisoras suficientes para correr el batch.")
+    else:
+        risk_penalty = 0.5  # puedes ajustar este penalizador
+
+        results = []
+        failed = []
+
+        # Usamos SIEMPRE Precio para comparabilidad en ranking
+        for t in tickers_all:
+            try:
+                yp = series_for_ticker(wide, t, "Precio").dropna()
+                if yp.empty:
+                    raise ValueError("Serie vacía")
+                # Asegura frecuencia
+                if yp.index.inferred_freq is None:
+                    inf = pd.infer_freq(yp.index)
+                    if inf is None:
+                        inf = "M"
+                    yp = yp.asfreq(inf)
+
+                fitted, fcst, resid, meta, ci = fit_forecast_arima(yp, h=h, seasonal=seasonal, m=m)
+
+                last_price = float(yp.iloc[-1])
+                last_fc = float(fcst.iloc[-1])
+
+                if last_price == 0 or np.isnan(last_price) or np.isnan(last_fc):
+                    raise ValueError("Valores inválidos para retorno")
+
+                expected_ret_pct = (last_fc - last_price) / abs(last_price) * 100.0
+
+                # riesgo: ancho del IC95% en el último paso relativo al precio
+                last_ci = ci.iloc[-1]
+                width = float(last_ci["upper"] - last_ci["lower"])
+                risk_pct = (width / (2.0 * abs(last_price))) * 100.0 if last_price != 0 else np.nan
+
+                score = expected_ret_pct - risk_penalty * risk_pct
+
+                results.append({
+                    "ticker": t,
+                    "last_price": round(last_price, 4),
+                    "forecast_price": round(last_fc, 4),
+                    "expected_ret_%": round(expected_ret_pct, 3),
+                    "risk_%": round(risk_pct, 3),
+                    "score": round(score, 3),
+                    "order": meta.get("order"),
+                    "seasonal_order": meta.get("seasonal_order"),
+                    "aic": round(meta.get("aic", np.nan), 2)
+                })
+            except Exception as e:
+                failed.append((t, str(e)))
+                continue
+
+        if len(results) == 0:
+            st.error("No se pudieron generar pronósticos para las emisoras.")
+        else:
+            df_rank = pd.DataFrame(results).sort_values("score", ascending=False).reset_index(drop=True)
+            st.markdown("#### Tabla completa (ordenada por **score**)")
+            st.dataframe(df_rank, use_container_width=True)
+
+            top5 = df_rank.head(5).copy()
+            st.markdown("### 🏆 Top 5 para invertir")
+            st.dataframe(top5[["ticker","last_price","forecast_price","expected_ret_%","risk_%","score","order","seasonal_order","aic"]], use_container_width=True)
+
+            # Visual rápido: barras de retorno esperado y riesgo
+            fig_bar = go.Figure()
+            fig_bar.add_bar(x=top5["ticker"], y=top5["expected_ret_%"], name="Retorno esperado (%)")
+            fig_bar.add_bar(x=top5["ticker"], y=top5["risk_%"], name="Riesgo (%)")
+            fig_bar.update_layout(barmode="group", title="Top 5: Retorno esperado vs Riesgo (IC95%)")
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+            # Explicación corta por emisora
+            st.markdown("### ¿Por qué estos 5?")
+            for _, r in top5.iterrows():
+                st.markdown(
+                    f"- **{r['ticker']}**: se proyecta **{r['expected_ret_%']}%** en {h} pasos; "
+                    f"riesgo relativo **{r['risk_%']}%** (IC95%). "
+                    f"Score = {r['score']} (modelo {r['order']} estacional {r['seasonal_order']}, AIC {r['aic']})."
+                )
+
+            if failed:
+                with st.expander("⚠️ Tickers con errores al modelar"):
+                    st.write(pd.DataFrame(failed, columns=["ticker","error"]))
