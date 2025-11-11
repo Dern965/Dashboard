@@ -135,7 +135,8 @@ date,ticker,adj_close
   - Semanal → 52  
   - Mensual → 12  
   - Trimestral → 4  
-- El horizonte `h` se mide en pasos de la frecuencia elegida (meses si es M).  
+- El horizonte `h` se mide en pasos de la frecuencia elegida (meses si es M).
+  
 
 ---
 
